@@ -1,0 +1,45 @@
+name: content-engine
+
+# Runs the content engine in the cloud on a schedule (and on demand).
+on:
+  schedule:
+    - cron: "0 */6 * * *"    # every 6 hours (UTC). Edit to change frequency.
+  workflow_dispatch: {}        # adds a "Run workflow" button in the Actions tab
+
+permissions:
+  contents: write              # lets the job commit the new drafts + site back
+
+concurrency:
+  group: content-engine
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Draft any new blog posts
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python engine_v0.py --dry-run --limit 10 --json-out packs
+
+      - name: Build the review site
+        run: python build_review.py packs --out docs
+
+      - name: Publish drafts + site
+        run: |
+          git config user.name "content-engine"
+          git config user.email "actions@users.noreply.github.com"
+          git add packs docs
+          git commit -m "drafts: $(date -u +%Y-%m-%dT%H:%MZ)" || echo "no changes to commit"
+          git push
