@@ -91,11 +91,21 @@ def main():
     ap.add_argument("--scale", type=int, default=2)
     args = ap.parse_args()
 
+    os.makedirs(args.out, exist_ok=True)
     files = sorted(glob.glob(os.path.join(args.packs, "*.json")))
     if not files:
-        raise SystemExit(f"No .json packs found in {args.packs}/")
+        # nothing drafted yet — write a friendly placeholder so the hosted page
+        # still exists (and the workflow succeeds) instead of erroring out
+        with open(os.path.join(args.out, "index.html"), "w", encoding="utf-8") as fh:
+            fh.write("<!DOCTYPE html><meta charset='utf-8'>"
+                     "<body style='font-family:sans-serif;padding:48px;color:#000'>"
+                     "<h1 style='font-weight:500'>No drafts yet</h1>"
+                     "<p style='color:#6F6A63'>New blog posts will appear here automatically.</p>"
+                     "</body>")
+        open(os.path.join(args.out, ".nojekyll"), "w").close()
+        print("No packs yet — wrote placeholder page.")
+        return
 
-    os.makedirs(args.out, exist_ok=True)
     sections = []
     for f in files:
         stem = os.path.splitext(os.path.basename(f))[0]

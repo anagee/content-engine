@@ -182,7 +182,20 @@ def main():
     if args.json_out and os.path.isdir(args.json_out):
         seen |= {os.path.splitext(f)[0] for f in os.listdir(args.json_out) if f.endswith(".json")}
 
-    feed = feedparser.parse(FEED_URL)
+    # Fetch the feed with a browser-like User-Agent (Wix blocks bare requests
+    # from datacenter IPs like GitHub's), then parse the bytes.
+    try:
+        resp = requests.get(
+            FEED_URL, timeout=30,
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                   "Chrome/120.0.0.0 Safari/537.36"})
+        feed = feedparser.parse(resp.content)
+    except Exception as ex:  # noqa
+        sys.exit(f"Could not fetch the blog feed: {ex}")
+    if not feed.entries:
+        print("WARNING: the blog feed returned 0 entries — nothing to draft.", file=sys.stderr)
+
     processed = 0
     for e in feed.entries:
         if processed >= args.limit:
