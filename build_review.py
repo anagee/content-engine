@@ -45,6 +45,11 @@ h4{font-weight:700;font-size:11px;letter-spacing:.12em;text-transform:uppercase;
   background:#EFE9DE;border-radius:4px;font-weight:700;cursor:pointer}
 .approve input{width:18px;height:18px}
 @media print{.approve{display:none}}
+#archived-section{max-width:1100px;margin:8px 0 40px}
+#archived-section summary{cursor:pointer;font-weight:700;font-size:13px;letter-spacing:.08em;
+  text-transform:uppercase;color:#6F6A63;padding:10px 0}
+#archived-section section{opacity:.7}
+@media print{#archived-section{display:none}}
 """
 
 
@@ -56,7 +61,7 @@ def _block(title, body):
     return f'<div class="block"><h4>{esc(title)}</h4><div class="body">{esc(body)}</div></div>'
 
 
-def section_html(pack, img_rel, images):
+def section_html(pack, img_rel, images, stem, order):
     car = pack.get("instagram_carousel") or {}
     reel = pack.get("instagram_reel") or {}
     tt = pack.get("tiktok") or {}
@@ -65,7 +70,8 @@ def section_html(pack, img_rel, images):
     hashtags = " ".join(car.get("hashtags", []) or [])
     reel_txt = (reel.get("hook", "") + "\n\n" + reel.get("script", "")).strip()
     tt_txt = (tt.get("hook", "") + "\n\n" + tt.get("script", "")).strip()
-    return f"""<section>
+    cb_id = f"approve-{esc(stem)}"
+    return f"""<section data-id="{esc(stem)}" data-order="{order}">
   <div><span class="pill">{esc(pack.get('pillar',''))}</span></div>
   <h2><span class="dash"></span>{esc(pack.get('source_title',''))}</h2>
   <a class="src" href="{esc(pack.get('source_url',''))}">{esc(pack.get('source_url',''))}</a>
@@ -79,8 +85,82 @@ def section_html(pack, img_rel, images):
   </div>
   {_block('LinkedIn', li.get('post',''))}
   {_block('Quote card text', pack.get('quote_card',''))}
-  <label class="approve"><input type="checkbox"> Approved &mdash; ready to schedule</label>
+  <label class="approve" for="{cb_id}"><input type="checkbox" class="approve-checkbox" id="{cb_id}"> Approved &mdash; ready to schedule</label>
 </section>"""
+
+
+# Moves a checked post into a collapsible "Archived" section at the bottom of
+# the page (and back out again if unchecked), so the main review list stays
+# focused on what still needs a decision. State is remembered per-browser via
+# localStorage — this is a static, backend-less site, so "archived" is not
+# shared across different computers/browsers reviewing the same page.
+ARCHIVE_SCRIPT = """
+<script>
+(function(){
+  var KEY = 'contentEngineArchived';
+  function getArchived(){
+    try { return JSON.parse(localStorage.getItem(KEY) || '[]'); } catch(e){ return []; }
+  }
+  function setArchived(ids){
+    try { localStorage.setItem(KEY, JSON.stringify(ids)); } catch(e){}
+  }
+  var activeList = document.getElementById('active-posts');
+  var archivedList = document.getElementById('archived-posts');
+  var archivedSection = document.getElementById('archived-section');
+  var archivedSummary = document.getElementById('archived-summary');
+
+  function refreshUI(){
+    var n = archivedList.children.length;
+    archivedSummary.textContent = 'Archived (' + n + ')';
+    archivedSection.style.display = n ? '' : 'none';
+  }
+
+  function moveToArchive(section){
+    archivedList.appendChild(section);
+    refreshUI();
+  }
+
+  function moveToActive(section){
+    var order = parseInt(section.getAttribute('data-order'), 10);
+    var siblings = activeList.querySelectorAll('section');
+    var target = null;
+    for (var i = 0; i < siblings.length; i++){
+      if (parseInt(siblings[i].getAttribute('data-order'), 10) > order){
+        target = siblings[i];
+        break;
+      }
+    }
+    if (target) activeList.insertBefore(section, target);
+    else activeList.appendChild(section);
+    refreshUI();
+  }
+
+  var archived = getArchived();
+  document.querySelectorAll('section[data-id]').forEach(function(section){
+    var id = section.getAttribute('data-id');
+    var checkbox = section.querySelector('.approve-checkbox');
+    if (!checkbox) return;
+    if (archived.indexOf(id) !== -1){
+      checkbox.checked = true;
+      moveToArchive(section);
+    }
+    checkbox.addEventListener('change', function(){
+      var current = getArchived();
+      if (checkbox.checked){
+        if (current.indexOf(id) === -1) current.push(id);
+        setArchived(current);
+        moveToArchive(section);
+      } else {
+        current = current.filter(function(x){ return x !== id; });
+        setArchived(current);
+        moveToActive(section);
+      }
+    });
+  });
+  refreshUI();
+})();
+</script>
+"""
 
 
 def main():
@@ -92,7 +172,10 @@ def main():
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
-    files = sorted(glob.glob(os.path.join(args.packs, "*.json")))
+    # Newest post first: pack filenames are Mongo-style IDs whose leading hex
+    # digits encode the creation time, so a reverse alphabetical sort puts the
+    # most recently drafted post at the top of the review page.
+    files = sorted(glob.glob(os.path.join(args.packs, "*.json")), reverse=True)
     if not files:
         # nothing drafted yet — write a friendly placeholder so the hosted page
         # still exists (and the workflow succeeds) instead of erroring out
@@ -107,7 +190,7 @@ def main():
         return
 
     sections = []
-    for f in files:
+    for order, f in enumerate(files):
         stem = os.path.splitext(os.path.basename(f))[0]
         with open(f, encoding="utf-8") as fh:
             pack = json.load(fh)
@@ -119,14 +202,21 @@ def main():
             print("  (images already rendered, skipping)")
         else:
             visuals.render(pages, img_dir, scale=args.scale)
-        sections.append(section_html(pack, f"assets/{stem}", images))
+        sections.append(section_html(pack, f"assets/{stem}", images, stem, order))
 
     page = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
 <style>{CSS}</style></head><body>
 <h1>Content review</h1>
-<div class="sub">{len(files)} post(s) · tick what's approved, then schedule the approved ones · print to share with Bev</div>
+<div class="sub">{len(files)} post(s) · tick what's approved to send it to Archived · print to share with Bev</div>
+<div id="active-posts">
 {''.join(sections)}
+</div>
+<details id="archived-section">
+  <summary id="archived-summary">Archived (0)</summary>
+  <div id="archived-posts"></div>
+</details>
+{ARCHIVE_SCRIPT}
 </body></html>"""
 
     out_html = os.path.join(args.out, "index.html")
